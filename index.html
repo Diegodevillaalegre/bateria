@@ -1406,6 +1406,11 @@ const Notation = {
   destroy() { if (this.api) { try { this.api.destroy(); } catch (e) { } this.api = null; } if (this.el) this.el.innerHTML = ''; },
 };
 
+/* ---------- Desbloqueo de audio: los navegadores exigen un toque para sonar ---------- */
+function unlockAudio() {
+  Sound.ensure();
+  try { const pl = Notation.api && Notation.api.player; const o = pl && pl._instance && pl._instance._output; if (o && o.activate) o.activate(); } catch (e) { }
+}
 /* ---------- Navegación ---------- */
 let VIEW = 'home';
 const W = () => WINDOWS[S.timing] || WINDOWS.normal;
@@ -1771,6 +1776,7 @@ const Player = {
     if (this.tr.kind !== desired) this.setTransport(desired);
     if (this.tr.kind === 'band' && !(Notation.api && Notation.api.isReadyForPlayback)) this.setTransport('internal');
     if (this.mode === 'wait') this.advanceWait();
+    unlockAudio(); this.playAt = performance.now();
     this.tr.play();
     if (!this.tr.playing) { this.setTransport('internal'); this.tr.play(); }
     this.setHint(null); this.lockWake(true); this.updatePlayBtn(); closePops();
@@ -1895,6 +1901,14 @@ const Player = {
       const g = this.advanceWait();
       this.hw.waitLanes = g && tr.now(perf) >= g.t - 1 ? new Set(g.idx.filter(i => this.ses.state[i] === 0 && this.ses.required(N[i])).map(i => N[i].lane)) : null;
     } else this.hw.waitLanes = null;
+    if (tr.kind === 'band' && tr.playing && !tr.started) {
+      const bar = this.chart.barAt(tr.pos); const ci = S.countIn && bar ? (bar.tEnd - bar.t) / sp : 0;
+      if (perf - (this.playAt || perf) > ci + 3000) {
+        this.setTransport('internal'); this.tr.play(); this.playAt = perf;
+        toast('El reproductor de la banda no arrancó; sigo con el metrónomo simple. Toca la pantalla una vez antes de empezar para habilitar su audio.', 6000);
+        return;
+      }
+    }
     const t = tr.now(perf); const tv = t - this.latency() * sp;
     if (tr.playing && !tr.inCountIn(perf)) {
       if (this.mode === 'demo') {
@@ -2120,7 +2134,8 @@ function boot() {
     const lane = KEYMAP[e.key.toLowerCase()]; if (lane) { e.preventDefault(); Sound.ensure(); Input.fromUser(lane, 100, 'key'); }
   });
   document.addEventListener('visibilitychange', () => { if (document.hidden) Player.pause(); });
-  document.addEventListener('pointerdown', () => Sound.ensure(), { once: true, capture: true });
+  document.addEventListener('pointerdown', unlockAudio, { capture: true });
+  document.addEventListener('keydown', unlockAudio, { capture: true });
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { });
   window.__bq = { Player, Input, Midi, S, Lib, Sound, LESSONS, Notation, RepoSongs };
   go('home');
