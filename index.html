@@ -169,6 +169,10 @@ select.select{min-height:44px;padding:0 12px;border-radius:var(--r-s);border:1.5
 .stage-hint .h{font:900 40px/1.05 var(--display);text-shadow:0 2px 18px rgba(0,0,0,.8)}
 .stage-hint .s{color:var(--felt);margin-top:6px;text-shadow:0 1px 10px #000}
 .countdown{position:absolute;left:50%;top:40%;transform:translate(-50%,-50%);font:900 150px/1 var(--display);color:var(--head);z-index:4;pointer-events:none;text-shadow:0 6px 30px rgba(0,0,0,.7)}
+.diag{position:absolute;left:calc(18px + var(--safe-l));bottom:12px;z-index:3;pointer-events:none;font-size:15px;color:var(--head);background:rgba(17,11,7,.72);border:1px solid var(--line);border-radius:10px;padding:6px 10px;max-width:46%;font-variant-numeric:tabular-nums}
+.diag:empty{display:none}
+.diag b{font-weight:700}
+.syncfix{position:absolute;left:50%;top:96px;transform:translateX(-50%);z-index:5;min-height:48px;padding:0 20px;border-radius:999px;border:0;background:linear-gradient(180deg,var(--brass-hi),var(--brass));color:#2b1a08;font-weight:700;box-shadow:0 8px 24px rgba(0,0,0,.5)}
 .loading{position:absolute;inset:0;z-index:6;display:grid;place-items:center;background:rgba(17,11,7,.82)}
 .loading .box{text-align:center;max-width:420px;padding:20px}
 .spinner{width:56px;height:56px;margin:0 auto 14px;border-radius:50%;border:5px solid var(--walnut-4);border-top-color:var(--brass);animation:spin .9s linear infinite}
@@ -340,7 +344,7 @@ dialog::backdrop{background:rgba(10,6,4,.78);backdrop-filter:blur(3px)}
         <p class="muted" style="margin:0">Compensa el retraso entre lo que escuchas y lo que llega del módulo. Calibra con audífonos o con el mismo parlante que usarás para practicar.</p>
         <div class="field">
           <label class="lbl" for="lat">Corrección <span id="lat-v">0 ms</span></label>
-          <input class="range" type="range" id="lat" min="-60" max="250" step="1">
+          <input class="range" type="range" id="lat" min="-150" max="400" step="1">
         </div>
         <div class="row" style="margin-top:12px"><button class="btn primary" id="btn-calib">Calibrar con el metrónomo</button></div>
       </div>
@@ -373,6 +377,7 @@ dialog::backdrop{background:rgba(10,6,4,.78);backdrop-filter:blur(3px)}
       <span class="pill" id="pl-bar">Compás 1</span>
       <span class="pill opt" id="pl-sig">4/4</span>
       <span class="pill" id="pl-bpm">♩ 120</span>
+      <span class="pill opt" id="pl-audio">Metrónomo</span>
       <span class="pill opt" id="pl-dev"><span class="dot" id="pl-dot"></span><span id="pl-devname">Sin batería</span></span>
     </div>
   </header>
@@ -384,6 +389,8 @@ dialog::backdrop{background:rgba(10,6,4,.78);backdrop-filter:blur(3px)}
     <div class="meter-wrap"><canvas id="meter" width="480" height="60"></canvas><div class="lbl"><span>antes</span><span>después</span></div></div>
     <div class="stage-hint" id="hint"><div class="h" id="hint-h">Listo</div><div class="s" id="hint-s">Pulsa reproducir o golpea el bombo dos veces</div></div>
     <div class="countdown" id="countdown" hidden></div>
+    <div class="diag" id="diag" aria-live="polite"></div>
+    <button class="syncfix" id="syncfix" hidden></button>
     <div class="loading" id="loading" hidden><div class="box"><div class="spinner"></div><div id="loading-t" style="font-weight:700">Leyendo partitura…</div><div class="muted" id="loading-s" style="margin-top:4px"></div></div></div>
   </div>
   <div class="pl-strip" id="strip">
@@ -547,7 +554,7 @@ const KIT_PRESETS = {
 /* ---------- Ajustes ---------- */
 const DEFAULTS = {
   kitPreset: 'medeli', kitMap: null, latency: 0, bandOffset: 0, clickOffset: 0,
-  timing: 'normal', lookahead: 1.8, view3d: true, lefty: false, appSounds: 'auto', minVel: 6,
+  timing: 'relaxed', atOutput: 'worklet', lookahead: 1.8, view3d: true, lefty: false, appSounds: 'auto', minVel: 6,
   tomFlex: true, cymFlex: false, countIn: true, click: true, clickVol: 0.7, bandVol: 0.85, refDrums: false, trainer: false, source: 'band',
 };
 const WINDOWS = { relaxed: [40, 80, 135], normal: [30, 60, 105], strict: [22, 45, 80] };
@@ -673,7 +680,8 @@ const Midi = {
   msg(e, inp) {
     const d = e.data; if (!d || d.length < 3) return;
     const st = d[0] & 0xf0; const now = performance.now();
-    let perf = e.timeStamp; if (!(perf > 0) || perf > now + 5 || perf < now - 400) perf = now;
+    // Algunos Android entregan marcas de tiempo MIDI con desfase: solo se confía en ellas si coinciden con la llegada
+    let perf = e.timeStamp; if (!(perf > 0) || perf > now + 2 || perf < now - 25) perf = now;
     if (st === 0x90 && d[2] > 0) Input.fromMidi(d[1], d[2], perf, inp.name);
   },
   emit() { for (const f of this.onChange) f(this); },
@@ -732,6 +740,14 @@ class Chart {
   get startMs() { return this.bars.length ? Math.min(this.bars[0].t, this.notes.length ? this.notes[0].t : 0) : 0; }
 }
 
+/* Muchas tablaturas escriben el hi-hat cerrado con baqueta como "hi-hat con pie" (nota 44).
+   Si el pie aparece tan seguido como un patrón de baqueta y casi no hay hi-hat cerrado, se pasa al carril Hi-hat. */
+function fixHiHat(notes, nBars) {
+  const hp = notes.filter(n => n.lane === 'HP'); const closed = notes.filter(n => n.key === 42).length;
+  if (hp.length >= Math.max(8, nBars * 2.5) && closed < hp.length * 0.3) { for (const n of hp) { n.lane = 'HH'; n.key = 42; n.open = false; } return hp.length; }
+  return 0;
+}
+
 /* ---------- Guitar Pro / MusicXML vía alphaTab ---------- */
 let atPromise = null;
 function loadAlphaTab() {
@@ -783,7 +799,8 @@ function chartFromScore(score, track) {
     const mb = m.masterBar; const sec = mb.section;
     return { n: mb.index + 1, tick: m.start, tickEnd: m.end, num: mb.timeSignatureNumerator, den: mb.timeSignatureDenominator, section: sec ? (sec.text || sec.marker || '') : '' };
   });
-  return new Chart({ title: score.title || '', artist: score.artist || '', source: 'gp', ppq: 960, notes, tempos, bars, meta: { omitted, trackName: track.name } });
+  const hpFix = fixHiHat(notes, bars.length);
+  return new Chart({ title: score.title || '', artist: score.artist || '', source: 'gp', ppq: 960, notes, tempos, bars, meta: { omitted, hpFix, trackName: track.name } });
 }
 
 /* ---------- MIDI estándar (.mid) ---------- */
@@ -830,8 +847,9 @@ function chartFromMidi(buf, fileName) {
     bars.push({ n: n++, tick, tickEnd: tick + len, num: sg.num, den: sg.den, section: mk ? mk.text : '' });
     tick += len;
   }
+  const hpFix = fixHiHat(notes, bars.length);
   const title = (fileName || '').replace(/\.[^.]+$/, '').replace(/[_]+/g, ' ') || name || 'MIDI';
-  return new Chart({ title, artist: name && name !== title ? name : '', source: 'midi', ppq: div, notes, tempos, bars, meta: { omitted } });
+  return new Chart({ title, artist: name && name !== title ? name : '', source: 'midi', ppq: div, notes, tempos, bars, meta: { omitted, hpFix } });
 }
 
 /* ---------- Ritmos de práctica ---------- */
@@ -1084,7 +1102,7 @@ class Session {
     this.chart = chart; const n = chart.notes.length;
     this.state = new Uint8Array(n); this.judg = new Int8Array(n).fill(-1); this.err = new Float32Array(n);
     this.ptr = {}; for (const l of ALL_LANES) this.ptr[l] = 0;
-    this.active = new Set([...chart.lanes, ...(chart.hasKick ? ['BD'] : [])]);
+    this.active = new Set([...chart.lanes, ...(chart.hasKick ? ['BD'] : [])].filter(l => l !== 'HP' || chart.source === 'lesson'));
     this.wait = false; this.demo = false; this.resetStats();
   }
   required(n) { return !n.grace && this.active.has(n.lane); }
@@ -1408,7 +1426,7 @@ const Notation = {
       display: { layoutMode: 'horizontal', staveProfile: 'score', scale: 0.9,
         resources: { staffLineColor: '#6e5a46', barSeparatorColor: '#8f7a63', barNumberColor: '#d9a441', mainGlyphColor: '#f2e9d8', secondaryGlyphColor: '#ae9c86', scoreInfoColor: '#f2e9d8' } },
       notation: { elements: { scoreTitle: false, scoreSubTitle: false, scoreArtist: false, scoreAlbum: false, scoreWords: false, scoreMusic: false, scoreWordsAndMusic: false, scoreCopyright: false, guitarTuning: false, trackNames: false } },
-      player: { playerMode: 'enabledSynthesizer', soundFont: AT_BASE + 'soundfont/sonivox.sf2', scrollElement: el, enableCursor: true, enableAnimatedBeatCursor: true, enableUserInteraction: true, scrollMode: 'continuous' },
+      player: { playerMode: 'enabledSynthesizer', outputMode: S.atOutput === 'sp' ? 'webAudioScriptProcessor' : 'webAudioAudioWorklets', soundFont: AT_BASE + 'soundfont/sonivox.sf2', scrollElement: el, enableCursor: true, enableAnimatedBeatCursor: true, enableUserInteraction: true, scrollMode: 'continuous' },
     };
     const api = new window.alphaTab.AlphaTabApi(el, settings); this.api = api;
     const sub = (name, fn) => { const ev = api[name]; if (ev && typeof ev.on === 'function') ev.on(fn); };
@@ -1702,6 +1720,8 @@ const Player = {
     $('#b-set').onclick = e => { if (togglePop('pop-set', e.currentTarget)) this.syncSetPop(); };
     $('#b-view').onclick = () => this.cycleBottom();
     $('#b-full').onclick = () => this.toggleFull();
+    $('#syncfix').addEventListener('pointerdown', e => e.stopPropagation());
+    $('#syncfix').onclick = () => { S.latency = clamp(S.latency + (this.syncSug || 0), -150, 400); saveSettings(); this.offs = []; $('#syncfix').hidden = true; toast(`Sincronía corregida: ${S.latency} ms. Repite la sección para comprobar.`, 3500); };
     document.addEventListener('pointerdown', e => { if (!e.target.closest('.pop') && !e.target.closest('.tbtn')) closePops(); });
     const mm = $('#minimap');
     mm.addEventListener('pointerdown', e => { e.stopPropagation(); if (!this.chart) return; const r = mm.getBoundingClientRect(); const f = clamp((e.clientX - r.left) / r.width, 0, 1); const ms = this.chart.startMs + f * (this.chart.duration - this.chart.startMs); const b = this.chart.barAt(ms); this.pause(); this.seekTo(b.t); });
@@ -1775,7 +1795,7 @@ const Player = {
     Notation.destroy();
     Object.assign(this, { chart, score: o.score || null, track: o.track || null, songId: o.id || null, lesson: o.lesson || null });
     this.ses = new Session(chart); this.mode = 'play'; this.loop = null; this.la = this.lb = null; this.finished = false; this.gi = 0; this.passNum = 0;
-    this.speed = 1; this.bandReady = false; this.bandState = ''; this.cursorTick = -1; this.lastTv = null;
+    this.speed = 1; this.bandReady = false; this.bandState = ''; this.cursorTick = -1; this.lastTv = null; this.offs = []; $('#syncfix').hidden = true;
     $('#pl-t').textContent = chart.title || 'Sin título';
     $('#pl-a').textContent = chart.source === 'lesson' ? chart.meta.lesson.desc : (chart.artist || (chart.source === 'midi' ? 'Archivo MIDI' : ''));
     this.bottom = chart.source === 'gp' ? 'notation' : 'grid'; this.applyBottom();
@@ -1785,6 +1805,8 @@ const Player = {
     this.hw.setup(chart, this.ses); this.hideLoading(); this.readyHint();
     requestAnimationFrame(() => this.resize());
     if (chart.source === 'gp') this.startNotation();
+    if (chart.meta.hpFix) toast(`Esta partitura escribe el hi-hat cerrado como “pie”; lo pasé al carril Hi-hat (${chart.meta.hpFix} notas).`, 5000);
+    else if (chart.lanes.includes('HP') && chart.source !== 'lesson') toast('El hi-hat con pie viene desactivado (no cuenta). Actívalo en Instrumentos si quieres practicarlo.', 4500);
     if (chart.meta.omitted) toast(`${chart.meta.omitted} notas de percusión menor (cencerro, pandero…) no tienen carril y se omitieron.`, 4500);
   },
   startNotation() {
@@ -1939,10 +1961,29 @@ const Player = {
     const sp = this.speed; const t = this.tr.timeAtPerf(ev.perf) - this.latency() * sp;
     const r = this.ses.hit(ev.lane, t, sp, W(), ev.vel);
     if (r && this.ses.required(r.n)) this.hw.judgeFx(ev.lane, r.j, r.e);
+    this.diagnose(ev, t, sp, r);
   },
   advanceWait() {
     const G = this.chart.groups; while (this.gi < G.length && this.groupDone(G[this.gi])) this.gi++;
     const g = G[this.gi]; if (this.tr && this.tr.setHold) this.tr.setHold(g ? g.t : null); return g;
+  },
+  diagnose(ev, t, sp, r) {
+    const N = this.chart.notes; const name = LANES[ev.lane].name; let txt;
+    if (r) txt = `<b>${name}</b> (nota ${ev.note}): ${Math.abs(r.e) < 8 ? 'a tiempo' : Math.round(Math.abs(r.e)) + ' ms ' + (r.e > 0 ? 'tarde' : 'antes')} ✓` + (r.n.lane !== ev.lane ? ` como ${LANES[r.n.lane].name.toLowerCase()}` : '');
+    else {
+      let best = null; for (let i = this.chart.firstNoteIndex(t - 1000 * sp); i < N.length && N[i].t < t + 1000 * sp; i++) if (N[i].lane === ev.lane && (!best || Math.abs(N[i].t - t) < Math.abs(best.t - t))) best = N[i];
+      if (!best) { const any = this.chart.lanes.includes(ev.lane) || (ev.lane === 'BD' && this.chart.hasKick); txt = `<b>${name}</b> (nota ${ev.note}): ${any ? 'no hay nota de este instrumento ahora' : 'esta canción no usa este instrumento'}`; }
+      else { const e = (t - best.t) / sp; txt = `<b>${name}</b> (nota ${ev.note}): ${Math.round(Math.abs(e))} ms ${e > 0 ? 'tarde' : 'antes'}, fuera de tiempo`; this.offTrack(e); }
+    }
+    if (r) this.offTrack(r.e);
+    $('#diag').innerHTML = txt; clearTimeout(this.diagT); this.diagT = setTimeout(() => { $('#diag').innerHTML = ''; }, 2500);
+  },
+  offTrack(e) {
+    this.offs = (this.offs || []).concat(e).slice(-12); if (this.offs.length < 8) return;
+    const a = this.offs.slice().sort((x, y) => x - y); const med = a[a.length >> 1]; const mad = a.map(x => Math.abs(x - med)).sort((x, y) => x - y)[a.length >> 1];
+    const b = $('#syncfix');
+    if (Math.abs(med) > W()[1] && mad < 45) { this.syncSug = Math.round(med); b.textContent = `Tus golpes llegan ${Math.abs(this.syncSug)} ms ${this.syncSug > 0 ? 'tarde' : 'antes'} siempre. Corregir`; b.hidden = false; }
+    else b.hidden = true;
   },
   groupDone(g) { const N = this.chart.notes; return g.idx.every(i => this.ses.state[i] !== 0 || !this.ses.required(N[i])); },
   waitHit(ev) {
@@ -1967,7 +2008,8 @@ const Player = {
       const bar = this.chart.barAt(tr.pos); const ci = S.countIn && bar ? (bar.tEnd - bar.t) / sp : 0;
       if (perf - (this.playAt || perf) > ci + 3000) {
         this.setTransport('internal'); this.tr.play(); this.playAt = perf;
-        toast('El reproductor de la banda no arrancó; sigo con el metrónomo simple. Toca la pantalla una vez antes de empezar para habilitar su audio.', 6000);
+        if (S.atOutput !== 'sp') { S.atOutput = 'sp'; saveSettings(); this.bandReady = false; this.startNotation(); toast('La banda no arrancó en este equipo. Activé un modo de audio compatible: pausa y vuelve a pulsar ▶ en unos segundos.', 7000); }
+        else toast('La banda no arrancó; sigo con el metrónomo. Toca la pantalla una vez antes de empezar.', 6000);
         return;
       }
     }
@@ -2004,6 +2046,8 @@ const Player = {
     const barTxt = `Compás ${b.n}/${maxN}`; if ($('#pl-bar').textContent !== barTxt) $('#pl-bar').textContent = barTxt;
     $('#pl-sig').textContent = b.num + '/' + b.den;
     $('#pl-bpm').textContent = '♩ ' + Math.round(b.bpm * this.speed);
+    const au = this.tr.kind === 'band' ? 'Banda' : this.chart.source !== 'gp' ? 'Metrónomo' : this.bandState === 'loading' ? 'Cargando banda…' : this.bandState === 'error' ? 'Sin banda: metrónomo' : S.source === 'click' ? 'Metrónomo' : this.mode === 'wait' ? 'Metrónomo' : 'Banda lista';
+    if ($('#pl-audio').textContent !== au) $('#pl-audio').textContent = au;
     const f = clamp((tv - ch.startMs) / Math.max(1, ch.duration - ch.startMs), 0, 1);
     $('#mm-ph').style.left = (f * 100) + '%'; $('#mm-done').style.width = (f * 100) + '%';
     if (this.mode === 'wait') {
@@ -2169,7 +2213,7 @@ const Results = {
     $('#results').addEventListener('click', e => {
       const b = e.target.closest('[data-r]'); if (!b) { if (e.target === $('#results')) this.close(); return; }
       const r = b.dataset.r;
-      if (r === 'sync') { const v = +b.dataset.v; if (this.sum.source === 'band') S.bandOffset = clamp(S.bandOffset + v, -80, 80); else S.latency = clamp(S.latency + v, -60, 250); saveSettings(); b.disabled = true; b.textContent = 'Corregido'; return; }
+      if (r === 'sync') { const v = +b.dataset.v; if (this.sum.source === 'band') S.bandOffset = clamp(S.bandOffset + v, -80, 80); else S.latency = clamp(S.latency + v, -150, 400); saveSettings(); b.disabled = true; b.textContent = 'Corregido'; return; }
       this.close();
       if (r === 'again') Player.restart(), Player.play();
       if (r === 'slower') { Player.setSpeed(Player.speed - 0.1); Player.restart(); }
@@ -2184,7 +2228,7 @@ const KEYMAP = { a: 'HP', s: 'CR', d: 'HH', f: 'SN', g: 'SN', h: 'T1', j: 'T1', 
 function boot() {
   Home.init(); Kit.init(); Player.init(); Results.init();
   $('#calib-cancel').onclick = () => Calib.close();
-  $('#calib-ok').onclick = () => { S.latency = clamp(Calib.value, -60, 250); saveSettings(); Calib.close(); Kit.render(); toast(`Sincronía ajustada a ${S.latency} ms`); };
+  $('#calib-ok').onclick = () => { S.latency = clamp(Calib.value, -150, 400); saveSettings(); Calib.close(); Kit.render(); toast(`Sincronía ajustada a ${S.latency} ms`); };
   Input.listeners.add(ev => { if (Wiz.on) { Wiz.onInput(ev); return; } if (VIEW === 'home') Home.onInput(ev); else if (VIEW === 'kit') Kit.onInput(ev); Calib.onInput(ev); });
   Midi.onChange.add(() => { Home.status(); Kit.status(); Player.status(); });
   Home.status(); Midi.init(true);
