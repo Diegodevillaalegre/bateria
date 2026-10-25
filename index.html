@@ -351,6 +351,7 @@ dialog::backdrop{background:rgba(10,6,4,.78);backdrop-filter:blur(3px)}
         <label for="preset" class="muted">Módulo</label>
         <select class="select" id="preset"></select>
         <button class="btn small" id="btn-reset-map">Restaurar</button>
+        <button class="btn small primary" id="btn-wiz">Configurar pad por pad</button>
       </div>
       <table class="map-table"><tbody id="map-body"></tbody></table>
       <div class="field">
@@ -465,6 +466,9 @@ dialog::backdrop{background:rgba(10,6,4,.78);backdrop-filter:blur(3px)}
     <div class="grp">
       <label class="switch">Vista en perspectiva (3D)<input type="checkbox" id="o-3d"></label>
       <label class="switch">Batería para zurdos (invertir carriles)<input type="checkbox" id="o-lefty"></label>
+      <label class="switch">Toms intercambiables<input type="checkbox" id="o-tomflex"></label>
+      <p class="note">Cuenta cualquier tom si tu batería tiene menos toms que la partitura o están en otro orden.</p>
+      <label class="switch">Crash y ride intercambiables<input type="checkbox" id="o-cymflex"></label>
       <label class="switch">Subir velocidad al dominar un tramo<input type="checkbox" id="o-trainer"></label>
       <p class="note">Al repetir un tramo con 90% o más de precisión, la velocidad sube 5% hasta llegar a 100%.</p>
     </div>
@@ -473,6 +477,16 @@ dialog::backdrop{background:rgba(10,6,4,.78);backdrop-filter:blur(3px)}
 
 <dialog id="results"><div class="res" id="res-body"></div></dialog>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div class="calib" id="wiz" hidden>
+  <div class="box">
+    <h2 style="font:900 36px/1 var(--display);margin:0">Configurar pad por pad</h2>
+    <p class="muted" id="wiz-step">Paso 1</p>
+    <div class="beat" id="wiz-pad" style="font-size:34px;line-height:1.05;padding:10px;text-align:center">Bombo</div>
+    <p id="wiz-t">Golpea este pad 3 veces, con fuerza normal.</p>
+    <p class="muted" id="wiz-n" style="min-height:24px"></p>
+    <div class="row" style="justify-content:center;margin-top:12px"><button class="btn" id="wiz-cancel">Cancelar</button><button class="btn" id="wiz-redo">Repetir</button><button class="btn" id="wiz-skip">No tengo este pad</button></div>
+  </div>
+</div>
 <div class="calib" id="calib" hidden>
   <div class="box">
     <h2 style="font:900 36px/1 var(--display);margin:0">Calibración</h2>
@@ -534,7 +548,7 @@ const KIT_PRESETS = {
 const DEFAULTS = {
   kitPreset: 'medeli', kitMap: null, latency: 0, bandOffset: 0, clickOffset: 0,
   timing: 'normal', lookahead: 1.8, view3d: true, lefty: false, appSounds: 'auto', minVel: 6,
-  countIn: true, click: true, clickVol: 0.7, bandVol: 0.85, refDrums: false, trainer: false, source: 'band',
+  tomFlex: true, cymFlex: false, countIn: true, click: true, clickVol: 0.7, bandVol: 0.85, refDrums: false, trainer: false, source: 'band',
 };
 const WINDOWS = { relaxed: [40, 80, 135], normal: [30, 60, 105], strict: [22, 45, 80] };
 const S = (() => { try { return Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem('baqueta.v1') || '{}')); } catch { return { ...DEFAULTS }; } })();
@@ -1108,6 +1122,15 @@ class Session {
     return missed;
   }
   hit(lane, t, speed, W, vel) {
+    let r = this._hit(lane, t, speed, W, vel, false);
+    if (!r) {
+      const alts = (S.tomFlex && ['T1', 'T2', 'T3'].includes(lane)) ? ['T1', 'T2', 'T3'] : (S.cymFlex && ['CR', 'RD'].includes(lane)) ? ['CR', 'RD'] : (lane === 'HH' ? ['HP'] : []);
+      for (const a of alts) { if (a === lane) continue; r = this._hit(a, t, speed, W, vel, true); if (r) break; }
+    }
+    if (!r) this.c.extra++;
+    return r;
+  }
+  _hit(lane, t, speed, W, vel, quiet) {
     const N = this.chart.notes, arr = this.chart.byLane[lane]; if (!arr) return null;
     const win = W[2] * speed; let best = null, bd = Infinity;
     for (let p = this.ptr[lane]; p < arr.length; p++) {
@@ -1115,7 +1138,7 @@ class Session {
       if (this.state[n.i] !== 0) continue;
       const ad = Math.abs(d); if (ad <= win && ad < bd) { best = n; bd = ad; }
     }
-    if (!best) { this.c.extra++; return null; }
+    if (!best) return null;
     const e = (t - best.t) / speed, ae = Math.abs(e); const j = ae <= W[0] ? 0 : ae <= W[1] ? 1 : 2;
     this.state[best.i] = 1; this.judg[best.i] = j; this.err[best.i] = e;
     if (this.required(best)) this.count(best, j, e, vel);
@@ -1552,6 +1575,8 @@ const Kit = {
     $('#minvel').oninput = e => { S.minVel = +e.target.value; $('#minvel-v').textContent = S.minVel; saveSettings(); };
     $('#lat').oninput = e => { S.latency = +e.target.value; $('#lat-v').textContent = S.latency + ' ms'; saveSettings(); };
     $('#btn-calib').onclick = () => Calib.start();
+    $('#btn-wiz').onclick = () => Wiz.start();
+    $('#wiz-cancel').onclick = () => Wiz.cancel(); $('#wiz-skip').onclick = () => Wiz.next(); $('#wiz-redo').onclick = () => Wiz.show();
     $('#map-body').addEventListener('click', e => {
       const lb = e.target.closest('[data-learn]'); const rm = e.target.closest('[data-rm]');
       if (lb) { this.learning = this.learning === lb.dataset.learn ? null : lb.dataset.learn; this.kit.learn(this.learning); this.renderMap(); if (this.learning) toast(`Golpea el pad de ${LANES[this.learning].name}`); }
@@ -1592,6 +1617,40 @@ const Kit = {
   },
 };
 
+const WIZ_STEPS = [
+  ['BD', 'Bombo', 'Pisa el pedal del bombo'], ['SN', 'Caja', 'Golpea el centro de la caja'], ['SN', 'Aro de la caja', 'Golpea el aro o borde de la caja (si tu caja no tiene zona de aro, salta)'],
+  ['HH', 'Hi-hat cerrado', 'Con el pedal pisado, golpea el hi-hat'], ['HH', 'Hi-hat abierto', 'Con el pie arriba, golpea el hi-hat'], ['HP', 'Hi-hat con pie', 'Pisa el pedal del hi-hat sin golpear'],
+  ['T1', 'Tom 1 (agudo)', 'Golpea el tom más pequeño'], ['T2', 'Tom 2 (medio)', 'Golpea el segundo tom'], ['T3', 'Tom de piso', 'Golpea el tom de piso'],
+  ['CR', 'Crash', 'Golpea el crash'], ['RD', 'Ride', 'Golpea el ride'], ['RD', 'Campana del ride', 'Golpea la campana del ride (si no tiene, salta)'],
+];
+const Wiz = {
+  on: false, i: 0, hits: [], map: {},
+  start() { if (!Midi.connected) { toast('Conecta la batería primero (punto verde arriba).'); return; } this.on = true; this.i = 0; this.map = {}; this.hits = []; $('#wiz').hidden = false; this.show(); },
+  show() {
+    const st = WIZ_STEPS[this.i]; $('#wiz-step').textContent = `Paso ${this.i + 1} de ${WIZ_STEPS.length}`;
+    $('#wiz-pad').textContent = st[1]; $('#wiz-pad').style.borderColor = LANES[st[0]].color;
+    $('#wiz-t').textContent = st[2] + ', 3 veces.'; $('#wiz-n').textContent = ''; this.hits = [];
+  },
+  onInput(ev) {
+    if (!this.on || ev.source !== 'midi') return;
+    this.hits.push(ev.note); const el = $('#wiz-pad'); el.classList.add('on'); setTimeout(() => el.classList.remove('on'), 90);
+    $('#wiz-n').textContent = 'Recibido: ' + this.hits.map(n => 'nota ' + n).join(', ');
+    if (this.hits.length >= 3) {
+      const cnt = {}; for (const n of this.hits) cnt[n] = (cnt[n] || 0) + 1;
+      const best = Object.entries(cnt).sort((a, b) => b[1] - a[1]); const lane = WIZ_STEPS[this.i][0];
+      for (const [n, c] of best) if (c >= 2 || n == best[0][0]) this.map[n] = lane;
+      setTimeout(() => this.next(), 350);
+    }
+  },
+  next() { this.i++; if (this.i >= WIZ_STEPS.length) this.finish(); else this.show(); },
+  finish() {
+    this.on = false; $('#wiz').hidden = true;
+    const n = Object.keys(this.map).length; if (!n) { toast('No se registraron notas.'); return; }
+    S.kitMap = { ...kitMap(), ...this.map };
+    S.kitPreset = 'custom'; saveSettings(); Kit.render(); toast(`Listo: ${n} notas asignadas a tu batería.`, 4000);
+  },
+  cancel() { this.on = false; $('#wiz').hidden = true; },
+};
 const Calib = {
   run: null, value: 0,
   start() {
@@ -1667,6 +1726,8 @@ const Player = {
     $('#o-3d').onchange = e => { S.view3d = e.target.checked; saveSettings(); this.hw.layout(); };
     $('#o-lefty').onchange = e => { S.lefty = e.target.checked; saveSettings(); if (this.chart) this.hw.setup(this.chart, this.ses); };
     $('#o-trainer').onchange = e => { S.trainer = e.target.checked; saveSettings(); };
+    $('#o-tomflex').onchange = e => { S.tomFlex = e.target.checked; saveSettings(); };
+    $('#o-cymflex').onchange = e => { S.cymFlex = e.target.checked; saveSettings(); };
     // instrumentos
     $$('#pop-lanes [data-lp]').forEach(b => b.onclick = () => this.lanePreset(b.dataset.lp));
     $('#lane-toggles').addEventListener('change', e => { const l = e.target.dataset.lane; if (!l) return; if (e.target.checked) this.ses.active.add(l); else this.ses.active.delete(l); });
@@ -1866,6 +1927,7 @@ const Player = {
 
   /* entrada */
   onInput(ev) {
+    if (VIEW === 'player' && ev.source === 'midi' && !ev.lane) { this.unk = this.unk || new Set(); if (!this.unk.has(ev.note)) { this.unk.add(ev.note); toast(`Tu módulo envió la nota ${ev.note} y no está asignada. Usa “Configurar pad por pad” en Kit y calibración.`, 5000); } }
     if (VIEW !== 'player' || !this.chart || !ev.lane || !this.tr) return;
     this.hw.hitFx(ev.lane);
     if (!this.tr.playing) {
@@ -2010,7 +2072,7 @@ const Player = {
     $$('#o-timing button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === S.timing)));
     const w = W(); $('#o-timing-n').textContent = `Perfecto ±${w[0]} ms, bien ±${w[1]} ms, justo ±${w[2]} ms.`;
     $('#o-look').value = S.lookahead; $('#o-look-v').textContent = S.lookahead.toFixed(1) + ' s';
-    $('#o-3d').checked = S.view3d; $('#o-lefty').checked = S.lefty; $('#o-trainer').checked = S.trainer;
+    $('#o-3d').checked = S.view3d; $('#o-lefty').checked = S.lefty; $('#o-trainer').checked = S.trainer; $('#o-tomflex').checked = S.tomFlex; $('#o-cymflex').checked = S.cymFlex;
   },
   usedLanes() { return this.chart ? [...this.chart.lanes, ...(this.chart.hasKick ? ['BD'] : [])] : []; },
   syncLanePop() {
@@ -2123,7 +2185,7 @@ function boot() {
   Home.init(); Kit.init(); Player.init(); Results.init();
   $('#calib-cancel').onclick = () => Calib.close();
   $('#calib-ok').onclick = () => { S.latency = clamp(Calib.value, -60, 250); saveSettings(); Calib.close(); Kit.render(); toast(`Sincronía ajustada a ${S.latency} ms`); };
-  Input.listeners.add(ev => { if (VIEW === 'home') Home.onInput(ev); else if (VIEW === 'kit') Kit.onInput(ev); Calib.onInput(ev); });
+  Input.listeners.add(ev => { if (Wiz.on) { Wiz.onInput(ev); return; } if (VIEW === 'home') Home.onInput(ev); else if (VIEW === 'kit') Kit.onInput(ev); Calib.onInput(ev); });
   Midi.onChange.add(() => { Home.status(); Kit.status(); Player.status(); });
   Home.status(); Midi.init(true);
   document.addEventListener('keydown', e => {
