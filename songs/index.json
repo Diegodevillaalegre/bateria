@@ -1,0 +1,36 @@
+{
+  "songs": [
+    {
+      "file": "Shuffle-en-La.gp",
+      "title": "Shuffle en La",
+      "artist": "Original para Baqueta",
+      "subtitle": "Blues de 12 compases en 12/8",
+      "tempo": 96,
+      "ts": "12/8"
+    },
+    {
+      "file": "Rock-en-Mi.gp",
+      "title": "Rock en Mi",
+      "artist": "Original para Baqueta",
+      "subtitle": "Corcheas, crash y bombo sincopado",
+      "tempo": 100,
+      "ts": "4/4"
+    },
+    {
+      "file": "Funk-en-Re-menor.gp",
+      "title": "Funk en Re menor",
+      "artist": "Original para Baqueta",
+      "subtitle": "Semicorcheas y ghost notes en la caja",
+      "tempo": 92,
+      "ts": "4/4"
+    },
+    {
+      "file": "Balada-en-6-8.gp",
+      "title": "Balada en 6/8",
+      "artist": "Original para Baqueta",
+      "subtitle": "Pulso ternario lento con rellenos en toms",
+      "tempo": 90,
+      "ts": "6/8"
+    }
+  ]
+}
